@@ -1,0 +1,76 @@
+from pymongo import MongoClient
+import requests
+from bs4 import BeautifulSoup
+from pymongo.errors import DuplicateKeyError
+
+# Source MongoDB-1 connection details
+mongodb1_uri = "mongodb+srv://sakshabangera0133:DRXfHfmyXnYhetoO@cluster0.mzpfssc.mongodb.net/"
+mongodb1_db_name = "wikipedia"
+mongodb1_collection_name = "collection_wikipedia"
+
+# myMongoDB connection details
+my_mongodb_uri = "mongodb+srv://samarth12:samarth@cluster0.nb08nft.mongodb.net/?retryWrites=true&w=majority"
+my_mongodb_db_name = "Wikipedia"
+my_mongodb_collection_name = "Wikicollection"
+
+# Function to scrape a Wikipedia page
+def scrape_wikipedia_page(parent_url, url):
+    try:
+        # Correctly format the URL
+        if not url.startswith('https://en.wikipedia.org'):
+            url = 'https://en.wikipedia.org' + url
+
+        response = requests.get(url)
+        response.raise_for_status()  
+        soup = BeautifulSoup(response.content, 'html.parser')
+        title = soup.find('h1', {'class': 'firstHeading'}).text.strip()
+        content_paragraphs = soup.find_all('p')
+        content = '\n'.join([p.text.strip() for p in content_paragraphs])   
+
+        return {'title': title, 'content': content, 'url': url, 'parent_url': parent_url}
+
+    except requests.RequestException as e:
+        print(f"Error fetching URL: {e}")
+        return None
+
+# Connect to source MongoDB-1
+client_mongodb1 = MongoClient(mongodb1_uri)
+db_mongodb1 = client_mongodb1[mongodb1_db_name]
+collection_mongodb1 = db_mongodb1[mongodb1_collection_name]
+
+# Connect to my MongoDB
+client_your_mongodb = MongoClient(my_mongodb_uri)
+db_your_mongodb = client_your_mongodb[my_mongodb_db_name]
+collection_your_mongodb = db_your_mongodb[my_mongodb_collection_name]
+
+# Retrieve URLs and links from MongoDB-1
+urls_cursor = collection_mongodb1.find({}, {"_id": 0, "url": 1, "links": 1})
+
+# Scrape links and store data in my MongoDB
+for document in urls_cursor:
+    parent_url = document["url"]
+    links = document["links"]
+
+    for link in links:
+        # Check if link is already scraped in your MongoDB
+        if collection_your_mongodb.find_one({"URL": link}):
+            print(f"Skipping already scraped URL: {link}")
+            continue
+
+        page_data = scrape_wikipedia_page(parent_url, link)
+        if page_data:
+            try:
+                collection_your_mongodb.insert_one({
+                    "Parent_URL": page_data['parent_url'],
+                    "URL": page_data['url'],
+                    "Title": page_data['title'],
+                    "Content": page_data['content']
+                })
+                print("Parent URL:", page_data['parent_url'])
+                print("URL:", page_data['url'])
+                print("Title:", page_data['title'])
+                print("Content:", page_data['content'])  
+                print("-" * 50)
+
+            except DuplicateKeyError:
+                print(f"Duplicate key error for URL: {link}")
